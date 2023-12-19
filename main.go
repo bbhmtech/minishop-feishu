@@ -2,7 +2,8 @@ package main
 
 import (
 	"context"
-	"fmt"
+	"encoding/json"
+	"io"
 	"net/http"
 	"os"
 	"strconv"
@@ -47,7 +48,7 @@ var (
 	tableId, appToken string
 )
 
-func mapWxOrderToFeishuRecord(o wx.Order) map[string]interface{} {
+func mapWxOrderToFeishuRecord(o wx.Order, shippingState int) map[string]interface{} {
 	createTime, err := time.ParseInLocation("2006-01-02 15:04:05", o.CreateTime, localTimeLocation)
 	if err != nil {
 		panic(err)
@@ -63,38 +64,62 @@ func mapWxOrderToFeishuRecord(o wx.Order) map[string]interface{} {
 	}
 
 	return map[string]interface{}{
-		"订单号":  strconv.FormatInt(o.OrderID, 10),
-		"支付单号": o.OrderDetail.PayInfo.TransactionID,
-		"下单时间": createTime.UnixMilli(),
-		"订单状态": orderStatusMapping[o.Status],
-		"商品名":  strings.Join(productName, ";"),
-		"客户备注": o.ExtInfo.CustomerNotes,
-		"商家备注": o.ExtInfo.MerchantNotes,
-		"客户姓名": o.OrderDetail.DeliveryInfo.AddressInfo.UserName,
-		"收货地址": o.OrderDetail.DeliveryInfo.AddressInfo.DetailInfo,
-		"配送方式": shippingMethodMap[o.OrderDetail.DeliveryInfo.ExpressFee[0].ShippingMethod],
+		"订单号":    strconv.FormatInt(o.OrderID, 10),
+		"支付单号":   o.OrderDetail.PayInfo.TransactionID,
+		"下单时间":   createTime.UnixMilli(),
+		"订单状态":   orderStatusMapping[o.Status],
+		"商品名":    strings.Join(productName, ";"),
+		"客户备注":   o.ExtInfo.CustomerNotes,
+		"商家备注":   o.ExtInfo.MerchantNotes,
+		"客户姓名":   o.OrderDetail.DeliveryInfo.AddressInfo.UserName,
+		"收货地址":   o.OrderDetail.DeliveryInfo.AddressInfo.DetailInfo,
+		"配送方式":   shippingMethodMap[o.OrderDetail.DeliveryInfo.ExpressFee[0].ShippingMethod],
+		"发货信息上传": shippingState >= 2,
 	}
 
 }
 
-func pullMinishopOrders(operatorOpenId string) {
+func pullMinishopOrders() {
 	// fmt.Println(wx.ListOrders())
 
+	shippingInfo := wx.ListShippingInfo(15)
+
 	// key: recordId
-	existingRecordsMap := map[string](map[string]interface{}){}
+	existingRecordsMap := make(map[string](map[string]interface{}), 50)
 	// key: orderId
 	newRecordsMap := map[string](map[string]interface{}){}
-	for _, v := range wx.ListOrders() {
-		newRecordsMap[strconv.FormatInt(v.OrderID, 10)] = mapWxOrderToFeishuRecord(v)
+	for k, v := range wx.ListOrders(15) {
+		tId := v.OrderDetail.PayInfo.TransactionID
+		newRecordsMap[k] = mapWxOrderToFeishuRecord(v, shippingInfo[tId])
 		// fmt.Println()
 	}
 
-	for _, v := range feishu.ListRecords("Hca7bQbAQay3y8siHD8cmtKmnZc", "tblRPH2xhfQKWrJG").Data.Items {
+	iter := feishu.IterRecords("Hca7bQbAQay3y8siHD8cmtKmnZc", "tblRPH2xhfQKWrJG", "today()-15 <= CurrentValue.[下单时间]")
+	for {
+		hasNext, v, err := iter.Next()
+		if err != nil {
+			panic(err)
+		}
+
+		if !hasNext {
+			break
+		}
+
 		orderId := *v.StringField("订单号")
 		if r, exists := newRecordsMap[orderId]; exists {
 			existingRecordsMap[*v.RecordId] = r
 			delete(newRecordsMap, orderId)
+
+			if len(existingRecordsMap) == 50 {
+				feishu.UpdateRecords(appToken, tableId, existingRecordsMap)
+				existingRecordsMap = make(map[string](map[string]interface{}), 50)
+			}
 		}
+
+	}
+
+	if len(existingRecordsMap) > 0 {
+		feishu.UpdateRecords(appToken, tableId, existingRecordsMap)
 	}
 
 	newRecords := []map[string]interface{}{}
@@ -107,22 +132,20 @@ func pullMinishopOrders(operatorOpenId string) {
 	// 	existingRecords = append(existingRecords, v)
 	// }
 
-	if len(newRecords) > 0 {
-		feishu.AddRecords(appToken, tableId, newRecords)
+	for i := 0; i < len(newRecords); i += 50 {
+		feishu.AddRecords(appToken, tableId, newRecords[i:i+50])
 	}
-	feishu.UpdateRecords(appToken, tableId, existingRecordsMap)
-
-	feishu.SendTextMessage("open_id", operatorOpenId, fmt.Sprint("同步完成，本次新增", len(newRecords), "条，更新", len(existingRecordsMap), "条。"))
 }
 
 func main() {
-
+	// load timezone data
 	var err error
 	localTimeLocation, err = time.LoadLocation("Asia/Shanghai")
 	if err != nil {
 		panic(err)
 	}
 
+	// configure clients and handlers
 	feishu.InitClient(os.Getenv("FEISHU_APPID"), os.Getenv("FEISHU_APPSECRET"))
 	wx.InitClient(os.Getenv("WEIXIN_APPID"), os.Getenv("WEIXIN_APPSECRET"))
 
@@ -132,13 +155,52 @@ func main() {
 		OnP2BotMenuV6(func(ctx context.Context, event *larkapplication.P2BotMenuV6) error {
 			if *event.Event.EventKey == "pullMinishopOrders" {
 				feishu.SendTextMessage("open_id", *event.Event.Operator.OperatorId.OpenId, "正在处理……")
-				go pullMinishopOrders(*event.Event.Operator.OperatorId.OpenId)
+				go func() {
+					pullMinishopOrders()
+					feishu.SendTextMessage("open_id", *event.Event.Operator.OperatorId.OpenId, "同步完成")
+				}()
 			}
 			return nil
 		})
 
+	// register handlers
 	http.HandleFunc("/feishu/event", httpserverext.NewEventHandlerFunc(handler, larkevent.WithLogLevel(larkcore.LogLevelDebug)))
+	http.HandleFunc("/wx/shippingInfo", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
 
+		buf, err := io.ReadAll(r.Body)
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		var req struct {
+			TransactionId string `json:"transactionId"`
+			LogisticsType int    `json:"logisticsType"`
+			ItemName      string `json:"itemName"`
+		}
+		err = json.Unmarshal(buf, &req)
+
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		err = wx.UploadShippingInfo(req.TransactionId, req.LogisticsType, req.ItemName)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+	})
+
+	pullMinishopOrders()
+
+	// listen and serve
 	err = http.ListenAndServe(os.Getenv("LISTEN_ADDR"), nil)
 	if err != nil {
 		panic(err)
