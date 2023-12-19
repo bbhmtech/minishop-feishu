@@ -3,9 +3,7 @@ package feishu
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 
-	larkcore "github.com/larksuite/oapi-sdk-go/v3/core"
 	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
 )
 
@@ -30,6 +28,5 @@ func SendTextMessage(receiveIdType, receiveId, content string) *larkim.CreateMes
 		panic(err)
 	}
 
-	fmt.Println(larkcore.Prettify(resp))
 	return resp
 }
