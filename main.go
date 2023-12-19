@@ -1,11 +1,18 @@
 package main
 
 import (
+	"context"
+	"net/http"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 
+	larkcore "github.com/larksuite/oapi-sdk-go/v3/core"
+	"github.com/larksuite/oapi-sdk-go/v3/core/httpserverext"
+	larkevent "github.com/larksuite/oapi-sdk-go/v3/event"
+	"github.com/larksuite/oapi-sdk-go/v3/event/dispatcher"
+	larkapplication "github.com/larksuite/oapi-sdk-go/v3/service/application/v6"
 	"github.com/yiffyi/minishop-feishu/feishu"
 	"github.com/yiffyi/minishop-feishu/wx"
 )
@@ -32,6 +39,10 @@ var (
 		"ShippingMethod_SameCity": "同城配送",
 		"ShippingMethod_Pickup":   "自提",
 	}
+)
+
+var (
+	tableId, appToken string
 )
 
 func mapWxOrderToFeishuRecord(o wx.Order) map[string]interface{} {
@@ -64,17 +75,7 @@ func mapWxOrderToFeishuRecord(o wx.Order) map[string]interface{} {
 
 }
 
-func main() {
-
-	var err error
-	localTimeLocation, err = time.LoadLocation("Asia/Shanghai")
-	if err != nil {
-		panic(err)
-	}
-
-	feishu.InitClient(os.Getenv("FEISHU_APPID"), os.Getenv("FEISHU_APPSECRET"))
-	wx.InitClient(os.Getenv("WEIXIN_APPID"), os.Getenv("WEIXIN_APPSECRET"))
-
+func pullMinishopOrders(operatorOpenId string) {
 	// fmt.Println(wx.ListOrders())
 
 	// key: recordId
@@ -105,7 +106,37 @@ func main() {
 	// }
 
 	if len(newRecords) > 0 {
-		feishu.AddRecords("Hca7bQbAQay3y8siHD8cmtKmnZc", "tblRPH2xhfQKWrJG", newRecords)
+		feishu.AddRecords(appToken, tableId, newRecords)
 	}
-	feishu.UpdateRecords("Hca7bQbAQay3y8siHD8cmtKmnZc", "tblRPH2xhfQKWrJG", existingRecordsMap)
+	feishu.UpdateRecords(appToken, tableId, existingRecordsMap)
+}
+
+func main() {
+
+	var err error
+	localTimeLocation, err = time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		panic(err)
+	}
+
+	feishu.InitClient(os.Getenv("FEISHU_APPID"), os.Getenv("FEISHU_APPSECRET"))
+	wx.InitClient(os.Getenv("WEIXIN_APPID"), os.Getenv("WEIXIN_APPSECRET"))
+
+	tableId, appToken = os.Getenv("FEISHU_TABLEID"), os.Getenv("FEISHU_APPTOKEN")
+
+	handler := dispatcher.NewEventDispatcher(os.Getenv("FEISHU_VERIFICATION"), os.Getenv("FEISHU_EVENTENCCODE")).
+		OnP2BotMenuV6(func(ctx context.Context, event *larkapplication.P2BotMenuV6) error {
+			if *event.Event.EventKey == "pullMinishopOrders" {
+				feishu.SendTextMessage("open_id", *event.Event.Operator.OperatorId.OpenId, "正在处理……")
+				go pullMinishopOrders(*event.Event.Operator.OperatorId.OpenId)
+			}
+			return nil
+		})
+
+	http.HandleFunc("/feishu/event", httpserverext.NewEventHandlerFunc(handler, larkevent.WithLogLevel(larkcore.LogLevelDebug)))
+
+	err = http.ListenAndServe(os.Getenv("LISTEN_ADDR"), nil)
+	if err != nil {
+		panic(err)
+	}
 }
