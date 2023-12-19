@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"os"
 	"strconv"
 	"strings"
 	"time"
+	_ "time/tzdata"
 
 	larkcore "github.com/larksuite/oapi-sdk-go/v3/core"
 	"github.com/larksuite/oapi-sdk-go/v3/core/httpserverext"
@@ -109,6 +111,8 @@ func pullMinishopOrders(operatorOpenId string) {
 		feishu.AddRecords(appToken, tableId, newRecords)
 	}
 	feishu.UpdateRecords(appToken, tableId, existingRecordsMap)
+
+	feishu.SendTextMessage("open_id", operatorOpenId, fmt.Sprint("同步完成，本次新增", len(newRecords), "条，更新", len(existingRecordsMap), "条。"))
 }
 
 func main() {
