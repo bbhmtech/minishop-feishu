@@ -1,11 +1,8 @@
 package wx
 
 import (
-	"bytes"
 	"encoding/json"
-	"fmt"
-	"io"
-	"net/http"
+	"strconv"
 	"time"
 )
 
@@ -84,39 +81,40 @@ type ListOrdersResponse struct {
 	TotalNum int     `json:"total_num"`
 }
 
-func ListOrders() []Order {
+func ListOrders(pastDays int) map[string]Order {
 	const timeFormat = "2006-01-02 15:04:05"
 	token := GetStableAccessToken()
 
 	t := time.Now()
-	body, err := json.Marshal(map[string]interface{}{
-		"start_create_time": t.Add(time.Hour * 24 * -15).Format(timeFormat),
+	page := 1
+	body := map[string]interface{}{
+		"start_create_time": t.Add(time.Hour * 24 * -time.Duration(pastDays)).Format(timeFormat),
 		"end_create_time":   t.Format(timeFormat),
 		// "status":            0,
-		"page":      0,
-		"page_size": 1000,
+		"page":      page,
+		"page_size": 50,
 		"source":    1,
-	})
-	if err != nil {
-		panic(err)
 	}
 
-	resp, err := http.Post("https://api.weixin.qq.com/product/order/get_list?access_token="+token, "application/json", bytes.NewBuffer(body))
-	if err != nil {
-		panic(err)
-	}
-	defer resp.Body.Close()
+	r := map[string]Order{}
+	for page := 1; ; page++ {
+		body["page"] = page
+		buf := wxPostJSON("https://api.weixin.qq.com/product/order/get_list?access_token="+token, body)
 
-	body, err = io.ReadAll(resp.Body)
-	if err != nil {
-		panic(err)
+		var data ListOrdersResponse
+		err := json.Unmarshal(buf, &data)
+		if err != nil {
+			panic(err)
+		}
+
+		if len(data.Orders) == 0 || data.TotalNum == len(r) {
+			break
+		}
+
+		for _, v := range data.Orders {
+			r[strconv.FormatInt(v.OrderID, 10)] = v
+		}
 	}
 
-	var data ListOrdersResponse
-	err = json.Unmarshal(body, &data)
-	if err != nil {
-		panic(err)
-	}
-	fmt.Println(data.Errcode, data.TotalNum)
-	return data.Orders
+	return r
 }
