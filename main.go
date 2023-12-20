@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -79,7 +80,7 @@ func mapWxOrderToFeishuRecord(o wx.Order, shippingState int) map[string]interfac
 
 }
 
-func pullMinishopOrders() {
+func pullMinishopOrders() (created, updated int) {
 	// fmt.Println(wx.ListOrders())
 
 	shippingInfo := wx.ListShippingInfo(15)
@@ -112,6 +113,7 @@ func pullMinishopOrders() {
 
 			if len(existingRecordsMap) == 50 {
 				feishu.UpdateRecords(appToken, tableId, existingRecordsMap)
+				updated += 50
 				existingRecordsMap = make(map[string](map[string]interface{}), 50)
 			}
 		}
@@ -119,6 +121,7 @@ func pullMinishopOrders() {
 	}
 
 	if len(existingRecordsMap) > 0 {
+		updated += len(existingRecordsMap)
 		feishu.UpdateRecords(appToken, tableId, existingRecordsMap)
 	}
 
@@ -133,8 +136,10 @@ func pullMinishopOrders() {
 	// }
 
 	for i := 0; i < len(newRecords); i += 50 {
-		feishu.AddRecords(appToken, tableId, newRecords[i:i+50])
+		feishu.AddRecords(appToken, tableId, newRecords[i:min(len(newRecords), i+50)])
 	}
+	created += len(newRecords)
+	return
 }
 
 func main() {
@@ -156,8 +161,8 @@ func main() {
 			if *event.Event.EventKey == "pullMinishopOrders" {
 				feishu.SendTextMessage("open_id", *event.Event.Operator.OperatorId.OpenId, "正在处理……")
 				go func() {
-					pullMinishopOrders()
-					feishu.SendTextMessage("open_id", *event.Event.Operator.OperatorId.OpenId, "同步完成")
+					created, updated := pullMinishopOrders()
+					feishu.SendTextMessage("open_id", *event.Event.Operator.OperatorId.OpenId, fmt.Sprint("同步完成，创建", created, "条，同步", updated, "条"))
 				}()
 			}
 			return nil
