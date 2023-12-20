@@ -142,6 +142,42 @@ func pullMinishopOrders() (created, updated int) {
 	return
 }
 
+func pushShippingInfo() int {
+	shippingInfo := wx.ListShippingInfo(15)
+	updated := 0
+	iter := feishu.IterRecords("Hca7bQbAQay3y8siHD8cmtKmnZc", "tblRPH2xhfQKWrJG", `today()-15 <= CurrentValue.[下单时间] && CurrentValue.[实际状态].CONTAINS("投妥/已自提")`)
+	for {
+		hasNext, v, err := iter.Next()
+		if err != nil {
+			panic(err)
+		}
+
+		if !hasNext {
+			break
+		}
+
+		fmt.Println(v)
+		tId := *v.StringField("支付单号")
+		if r := shippingInfo[tId]; r < 2 {
+			logisticsType := 0
+			if *v.StringField("配送方式") == "同城配送" {
+				logisticsType = 2
+			} else if *v.StringField("配送方式") == "自提" {
+				logisticsType = 4
+			} else {
+				panic("unsupported logisticsType " + *v.StringField("配送方式"))
+			}
+			err = wx.UploadShippingInfo(tId, logisticsType, *v.StringField("商品名"))
+			if err != nil {
+				panic(err)
+			}
+			updated++
+		}
+
+	}
+	return updated
+}
+
 func main() {
 	// load timezone data
 	var err error
@@ -158,11 +194,18 @@ func main() {
 
 	handler := dispatcher.NewEventDispatcher(os.Getenv("FEISHU_VERIFICATION"), os.Getenv("FEISHU_EVENTENCCODE")).
 		OnP2BotMenuV6(func(ctx context.Context, event *larkapplication.P2BotMenuV6) error {
+			feishu.SendTextMessage("open_id", *event.Event.Operator.OperatorId.OpenId, "正在处理……")
 			if *event.Event.EventKey == "pullMinishopOrders" {
-				feishu.SendTextMessage("open_id", *event.Event.Operator.OperatorId.OpenId, "正在处理……")
 				go func() {
 					created, updated := pullMinishopOrders()
 					feishu.SendTextMessage("open_id", *event.Event.Operator.OperatorId.OpenId, fmt.Sprint("同步完成，创建", created, "条，同步", updated, "条"))
+				}()
+			}
+
+			if *event.Event.EventKey == "pushShippingInfo" {
+				go func() {
+					updated := pushShippingInfo()
+					feishu.SendTextMessage("open_id", *event.Event.Operator.OperatorId.OpenId, fmt.Sprint("同步完成，同步", updated, "条"))
 				}()
 			}
 			return nil
