@@ -74,6 +74,7 @@ func mapWxOrderToFeishuRecord(o wx.Order, shippingState int) map[string]interfac
 		"商家备注":   o.ExtInfo.MerchantNotes,
 		"客户姓名":   o.OrderDetail.DeliveryInfo.AddressInfo.UserName,
 		"收货地址":   o.OrderDetail.DeliveryInfo.AddressInfo.DetailInfo,
+		"预留电话":   o.OrderDetail.DeliveryInfo.AddressInfo.TelNumber,
 		"配送方式":   shippingMethodMap[o.OrderDetail.DeliveryInfo.ExpressFee[0].ShippingMethod],
 		"发货信息上传": shippingState >= 2,
 	}
@@ -95,7 +96,7 @@ func pullMinishopOrders() (created, updated int) {
 		// fmt.Println()
 	}
 
-	iter := feishu.IterRecords("Hca7bQbAQay3y8siHD8cmtKmnZc", "tblRPH2xhfQKWrJG", "today()-15 <= CurrentValue.[下单时间]")
+	iter := feishu.IterRecords(appToken, tableId, "today()-15 <= CurrentValue.[下单时间]")
 	for {
 		hasNext, v, err := iter.Next()
 		if err != nil {
@@ -145,7 +146,7 @@ func pullMinishopOrders() (created, updated int) {
 func pushShippingInfo() int {
 	shippingInfo := wx.ListShippingInfo(15)
 	updated := 0
-	iter := feishu.IterRecords("Hca7bQbAQay3y8siHD8cmtKmnZc", "tblRPH2xhfQKWrJG", `today()-15 <= CurrentValue.[下单时间] && CurrentValue.[实际状态].CONTAINS("投妥/已自提")`)
+	iter := feishu.IterRecords(appToken, tableId, `today()-15 <= CurrentValue.[下单时间] && CurrentValue.[实际情况] = "投妥/已自提"`)
 	for {
 		hasNext, v, err := iter.Next()
 		if err != nil {
@@ -156,7 +157,6 @@ func pushShippingInfo() int {
 			break
 		}
 
-		fmt.Println(v)
 		tId := *v.StringField("支付单号")
 		if r := shippingInfo[tId]; r < 2 {
 			logisticsType := 0
@@ -174,6 +174,10 @@ func pushShippingInfo() int {
 			updated++
 		}
 
+	}
+
+	if updated > 0 {
+		pullMinishopOrders()
 	}
 	return updated
 }
@@ -246,6 +250,7 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 	})
 
+	pushShippingInfo()
 	pullMinishopOrders()
 
 	// listen and serve
