@@ -81,6 +81,7 @@ type ListOrdersResponse struct {
 	TotalNum int     `json:"total_num"`
 }
 
+// key: orderId
 func ListOrders(pastDays int) map[string]Order {
 	const timeFormat = "2006-01-02 15:04:05"
 	token := GetStableAccessToken()
@@ -117,4 +118,18 @@ func ListOrders(pastDays int) map[string]Order {
 	}
 
 	return r
+}
+
+func DeliverOrder(orderId string) error {
+	token := GetStableAccessToken()
+	v, err := strconv.ParseUint(orderId, 10, 64)
+	if err != nil {
+		panic(err)
+	}
+
+	wxPostJSON("https://api.weixin.qq.com/product/delivery/send?access_token="+token, map[string]interface{}{
+		"order_id": v,
+	})
+
+	return nil
 }

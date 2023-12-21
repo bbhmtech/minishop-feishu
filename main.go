@@ -118,7 +118,6 @@ func pullMinishopOrders() (created, updated int) {
 				existingRecordsMap = make(map[string](map[string]interface{}), 50)
 			}
 		}
-
 	}
 
 	if len(existingRecordsMap) > 0 {
@@ -182,6 +181,35 @@ func pushShippingInfo() int {
 	return updated
 }
 
+func setDelivered() int {
+	orders := wx.ListOrders(15)
+	updated := 0
+
+	iter := feishu.IterRecords(appToken, tableId, `today()-15 <= CurrentValue.[下单时间]`)
+	for {
+		hasNext, v, err := iter.Next()
+		if err != nil {
+			panic(err)
+		}
+
+		if !hasNext {
+			break
+		}
+
+		orderId := *v.StringField("订单号")
+		if v.StringField("实际情况") != nil {
+			actualState := *v.StringField("实际情况")
+			actuallyDelivered := actualState == "单次自提" || actualState == "单次配送" || actualState == "7日包-配送" || actualState == "7日包-自提" || actualState == "投妥/已自提"
+			if r := orders[orderId].Status; r == 20 && actuallyDelivered {
+				wx.DeliverOrder(orderId)
+				updated++
+			}
+		}
+	}
+
+	return updated
+}
+
 func main() {
 	// load timezone data
 	var err error
@@ -209,6 +237,13 @@ func main() {
 			if *event.Event.EventKey == "pushShippingInfo" {
 				go func() {
 					updated := pushShippingInfo()
+					feishu.SendTextMessage("open_id", *event.Event.Operator.OperatorId.OpenId, fmt.Sprint("同步完成，同步", updated, "条"))
+				}()
+			}
+
+			if *event.Event.EventKey == "setDelivered" {
+				go func() {
+					updated := setDelivered()
 					feishu.SendTextMessage("open_id", *event.Event.Operator.OperatorId.OpenId, fmt.Sprint("同步完成，同步", updated, "条"))
 				}()
 			}
@@ -250,9 +285,9 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	pushShippingInfo()
-	pullMinishopOrders()
-
+	// pushShippingInfo()
+	// pullMinishopOrders()
+	fmt.Println(setDelivered())
 	// listen and serve
 	err = http.ListenAndServe(os.Getenv("LISTEN_ADDR"), nil)
 	if err != nil {
