@@ -3,7 +3,6 @@ package wx
 import (
 	"encoding/json"
 	"strconv"
-	"time"
 )
 
 type Order struct {
@@ -86,11 +85,11 @@ func ListOrders(pastDays int) map[string]Order {
 	const timeFormat = "2006-01-02 15:04:05"
 	token := GetStableAccessToken()
 
-	t := time.Now()
+	end, start := daysAgo(pastDays)
 	page := 1
 	body := map[string]interface{}{
-		"start_create_time": t.Add(time.Hour * 24 * -time.Duration(pastDays)).Format(timeFormat),
-		"end_create_time":   t.Format(timeFormat),
+		"start_create_time": start.Format(timeFormat),
+		"end_create_time":   end.Format(timeFormat),
 		// "status":            0,
 		"page":      page,
 		"page_size": 50,

@@ -9,9 +9,10 @@ import (
 // 订单状态枚举：(1) 待发货；(2) 已发货；(3) 确认收货；(4) 交易完成；(5) 已退款。
 func ListShippingInfo(pastDays int) map[string]int {
 	token := GetStableAccessToken()
+	_, begin := daysAgo(pastDays)
 	body := map[string]interface{}{
 		"pay_time_range": map[string]int64{
-			"begin_time": time.Now().Add(time.Hour * 24 * -time.Duration(pastDays)).Unix(),
+			"begin_time": begin.Unix(),
 			// "end_time":
 		},
 		"page_size": 50,
@@ -68,7 +69,7 @@ func UploadShippingInfo(transactionId string, logisticsType int, itemName string
 				"item_desc": itemName,
 			},
 		},
-		"upload_time": time.Now().Format(time.RFC3339Nano),
+		"upload_time": time.Now().In(WeixinLocation).Format(time.RFC3339Nano),
 		"payer": map[string]interface{}{
 			"openid": getOrderResp["order"].(map[string]interface{})["openid"],
 		},

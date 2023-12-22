@@ -21,8 +21,6 @@ import (
 	"github.com/yiffyi/minishop-feishu/wx"
 )
 
-var localTimeLocation *time.Location
-
 var (
 	orderStatusMapping = map[int]string{
 		10:  "待付款",
@@ -50,7 +48,7 @@ var (
 )
 
 func mapWxOrderToFeishuRecord(o wx.Order, shippingState int) map[string]interface{} {
-	createTime, err := time.ParseInLocation("2006-01-02 15:04:05", o.CreateTime, localTimeLocation)
+	createTime, err := time.ParseInLocation(wx.WeixinTimeFormat, o.CreateTime, wx.WeixinLocation)
 	if err != nil {
 		panic(err)
 	}
@@ -211,13 +209,6 @@ func setDelivered() int {
 }
 
 func main() {
-	// load timezone data
-	var err error
-	localTimeLocation, err = time.LoadLocation("Asia/Shanghai")
-	if err != nil {
-		panic(err)
-	}
-
 	// configure clients and handlers
 	feishu.InitClient(os.Getenv("FEISHU_APPID"), os.Getenv("FEISHU_APPSECRET"))
 	wx.InitClient(os.Getenv("WEIXIN_APPID"), os.Getenv("WEIXIN_APPSECRET"))
@@ -287,9 +278,9 @@ func main() {
 
 	// pushShippingInfo()
 	// pullMinishopOrders()
-	fmt.Println(setDelivered())
+	// fmt.Println(setDelivered())
 	// listen and serve
-	err = http.ListenAndServe(os.Getenv("LISTEN_ADDR"), nil)
+	err := http.ListenAndServe(os.Getenv("LISTEN_ADDR"), nil)
 	if err != nil {
 		panic(err)
 	}
