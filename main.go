@@ -47,11 +47,7 @@ var (
 	tableId, appToken string
 )
 
-func mapWxOrderToFeishuRecord(o wx.Order, shippingState int) map[string]interface{} {
-	createTime, err := time.ParseInLocation(wx.WeixinTimeFormat, o.CreateTime, wx.WeixinLocation)
-	if err != nil {
-		panic(err)
-	}
+func concatProductNames(o wx.Order) string {
 	productName := []string{}
 	for _, v := range o.OrderDetail.ProductInfos {
 		a := v.Title
@@ -61,13 +57,21 @@ func mapWxOrderToFeishuRecord(o wx.Order, shippingState int) map[string]interfac
 		a += " x " + strconv.Itoa(v.SkuCnt)
 		productName = append(productName, a)
 	}
+	return strings.Join(productName, ";")
+}
+
+func mapWxOrderToFeishuRecord(o wx.Order, shippingState int) map[string]interface{} {
+	createTime, err := time.ParseInLocation(wx.WeixinTimeFormat, o.CreateTime, wx.WeixinLocation)
+	if err != nil {
+		panic(err)
+	}
 
 	return map[string]interface{}{
 		"订单号":    strconv.FormatInt(o.OrderID, 10),
 		"支付单号":   o.OrderDetail.PayInfo.TransactionID,
 		"下单时间":   createTime.UnixMilli(),
 		"订单状态":   orderStatusMapping[o.Status],
-		"商品名":    strings.Join(productName, ";"),
+		"商品名":    concatProductNames(o),
 		"客户备注":   o.ExtInfo.CustomerNotes,
 		"商家备注":   o.ExtInfo.MerchantNotes,
 		"客户姓名":   o.OrderDetail.DeliveryInfo.AddressInfo.UserName,
@@ -143,36 +147,25 @@ func pullMinishopOrders() (created, updated int) {
 func pushShippingInfo() int {
 	shippingInfo := wx.ListShippingInfo(15)
 	updated := 0
-	iter := feishu.IterRecords(appToken, tableId, `today()-15 <= CurrentValue.[下单时间] && CurrentValue.[实际情况] = "投妥/已自提"`)
-	for {
-		hasNext, v, err := iter.Next()
-		if err != nil {
-			panic(err)
-		}
+	for _, v := range wx.ListOrders(15) {
+		tId := v.OrderDetail.PayInfo.TransactionID
 
-		if !hasNext {
-			break
-		}
-
-		tId := *v.StringField("支付单号")
-		if r := shippingInfo[tId]; r < 2 {
-			logisticsType := 0
-			if *v.StringField("配送方式") == "同城配送" {
-				logisticsType = 2
-			} else if *v.StringField("配送方式") == "自提" {
-				logisticsType = 4
-			} else {
-				panic("unsupported logisticsType " + *v.StringField("配送方式"))
+		if v.Status > 20 && v.Status <= 100 {
+			if r, exists := shippingInfo[tId]; r < 2 && exists {
+				logisticsType := 0
+				if v.OrderDetail.DeliveryInfo.ExpressFee[0].ShippingMethod == "ShippingMethod_SameCity" {
+					logisticsType = 2
+				} else if v.OrderDetail.DeliveryInfo.ExpressFee[0].ShippingMethod == "ShippingMethod_Pickup" {
+					logisticsType = 4
+				}
+				err := wx.UploadShippingInfo(tId, logisticsType, concatProductNames(v))
+				if err != nil {
+					panic(err)
+				}
+				updated++
 			}
-			err = wx.UploadShippingInfo(tId, logisticsType, *v.StringField("商品名"))
-			if err != nil {
-				panic(err)
-			}
-			updated++
 		}
-
 	}
-
 	if updated > 0 {
 		pullMinishopOrders()
 	}
