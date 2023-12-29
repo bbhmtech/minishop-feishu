@@ -44,7 +44,9 @@ var (
 )
 
 var (
-	tableId, appToken string
+	tableId, appToken    string
+	botOpenId            string
+	merchantNotesFieldId string
 )
 
 func concatProductNames(o wx.Order) string {
@@ -201,6 +203,25 @@ func setDelivered() int {
 	return updated
 }
 
+func updateMetadata() {
+	resp := feishu.ListFields(appToken, tableId)
+	found := false
+	for _, v := range resp.Data.Items {
+		if *v.FieldName == "商家备注" {
+			merchantNotesFieldId = *v.FieldId
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		panic("field 商家备注 not found")
+	}
+
+	botInfo := feishu.GetBotInfo()
+	botOpenId = botInfo.OpenID
+}
+
 func main() {
 	// configure clients and handlers
 	feishu.InitClient(os.Getenv("FEISHU_APPID"), os.Getenv("FEISHU_APPSECRET"))
@@ -208,31 +229,124 @@ func main() {
 
 	tableId, appToken = os.Getenv("FEISHU_TABLEID"), os.Getenv("FEISHU_APPTOKEN")
 
-	handler := dispatcher.NewEventDispatcher(os.Getenv("FEISHU_VERIFICATION"), os.Getenv("FEISHU_EVENTENCCODE")).
-		OnP2BotMenuV6(func(ctx context.Context, event *larkapplication.P2BotMenuV6) error {
-			feishu.SendTextMessage("open_id", *event.Event.Operator.OperatorId.OpenId, "正在处理……")
-			if *event.Event.EventKey == "pullMinishopOrders" {
-				go func() {
-					created, updated := pullMinishopOrders()
-					feishu.SendTextMessage("open_id", *event.Event.Operator.OperatorId.OpenId, fmt.Sprint("同步完成，创建", created, "条，同步", updated, "条"))
-				}()
-			}
+	handler := dispatcher.NewEventDispatcher(os.Getenv("FEISHU_VERIFICATION"), os.Getenv("FEISHU_EVENTENCCODE"))
+	handler.OnP2BotMenuV6(func(ctx context.Context, event *larkapplication.P2BotMenuV6) error {
+		feishu.SendTextMessage("open_id", *event.Event.Operator.OperatorId.OpenId, "正在处理……")
+		if *event.Event.EventKey == "pullMinishopOrders" {
+			go func() {
+				created, updated := pullMinishopOrders()
+				feishu.SendTextMessage("open_id", *event.Event.Operator.OperatorId.OpenId, fmt.Sprint("同步完成，创建", created, "条，同步", updated, "条"))
+			}()
+		}
 
-			if *event.Event.EventKey == "pushShippingInfo" {
-				go func() {
-					updated := pushShippingInfo()
-					feishu.SendTextMessage("open_id", *event.Event.Operator.OperatorId.OpenId, fmt.Sprint("同步完成，同步", updated, "条"))
-				}()
-			}
+		if *event.Event.EventKey == "pushShippingInfo" {
+			go func() {
+				updated := pushShippingInfo()
+				feishu.SendTextMessage("open_id", *event.Event.Operator.OperatorId.OpenId, fmt.Sprint("同步完成，同步", updated, "条"))
+			}()
+		}
 
-			if *event.Event.EventKey == "setDelivered" {
-				go func() {
-					updated := setDelivered()
-					feishu.SendTextMessage("open_id", *event.Event.Operator.OperatorId.OpenId, fmt.Sprint("同步完成，同步", updated, "条"))
-				}()
-			}
+		if *event.Event.EventKey == "setDelivered" {
+			go func() {
+				updated := setDelivered()
+				feishu.SendTextMessage("open_id", *event.Event.Operator.OperatorId.OpenId, fmt.Sprint("同步完成，同步", updated, "条"))
+			}()
+		}
+		return nil
+	}).OnCustomizedEvent("drive.file.bitable_record_changed_v1", func(ctx context.Context, event *larkevent.EventReq) error {
+		// 处理消息
+		cipherEventJsonStr, err := handler.ParseReq(ctx, event)
+		if err != nil {
+			//  错误处理
+			return err
+		}
+
+		plainEventJsonStr, err := handler.DecryptEvent(ctx, cipherEventJsonStr)
+		if err != nil {
+			//  错误处理
+			return err
+		}
+
+		// 处理解密后的 消息体
+		var body struct {
+			Event struct {
+				ActionList []struct {
+					Action     string `json:"action"`
+					AfterValue []struct {
+						FieldID    string `json:"field_id"`
+						FieldValue string `json:"field_value"`
+					} `json:"after_value"`
+					BeforeValue []struct {
+						FieldID    string `json:"field_id"`
+						FieldValue string `json:"field_value"`
+					} `json:"before_value"`
+					RecordID string `json:"record_id"`
+				} `json:"action_list"`
+				FileToken  string `json:"file_token"`
+				OperatorID struct {
+					OpenID string `json:"open_id"`
+				} `json:"operator_id"`
+				TableID    string `json:"table_id"`
+				UpdateTime int    `json:"update_time"`
+			} `json:"event"`
+		}
+		err = json.Unmarshal([]byte(plainEventJsonStr), &body)
+		if err != nil {
+			panic(err)
+		}
+
+		if body.Event.FileToken != appToken || body.Event.TableID != tableId {
+			return fmt.Errorf("fileToken %s or tableId %s mismatch: wanted %s, %s", body.Event.FileToken, body.Event.TableID, appToken, tableId)
+		}
+
+		if body.Event.OperatorID.OpenID == botOpenId {
 			return nil
-		})
+		}
+		// fmt.Println(plainEventJsonStr)
+
+		for _, v := range body.Event.ActionList {
+			if v.Action == "record_edited" {
+				var noteBefore, noteAfter string
+				var textFieldValue []struct {
+					Type string `json:"type"`
+					Text string `json:"text"`
+				}
+				for _, bv := range v.BeforeValue {
+					if bv.FieldID == merchantNotesFieldId {
+						if len(bv.FieldValue) > 0 {
+							err = json.Unmarshal([]byte(bv.FieldValue), &textFieldValue)
+							if err != nil {
+								panic(err)
+							}
+							noteBefore = textFieldValue[0].Text
+						} else {
+							noteBefore = ""
+						}
+						break
+					}
+				}
+				for _, av := range v.AfterValue {
+					if av.FieldID == merchantNotesFieldId {
+						if len(av.FieldValue) > 0 {
+							err = json.Unmarshal([]byte(av.FieldValue), &textFieldValue)
+							if err != nil {
+								panic(err)
+							}
+							noteAfter = textFieldValue[0].Text
+						} else {
+							noteAfter = ""
+						}
+						break
+					}
+				}
+
+				if noteBefore != noteAfter {
+					go feishu.SendTextMessage("open_id", body.Event.OperatorID.OpenID, fmt.Sprintln("merchantNotes changed, from", noteBefore, "->", noteAfter))
+				}
+			}
+		}
+		return nil
+	})
 
 	// register handlers
 	http.HandleFunc("/feishu/event", httpserverext.NewEventHandlerFunc(handler, larkevent.WithLogLevel(larkcore.LogLevelDebug)))
@@ -268,6 +382,9 @@ func main() {
 
 		w.WriteHeader(http.StatusOK)
 	})
+
+	updateMetadata()
+	feishu.SubscribeBitableEvents(appToken)
 
 	// pushShippingInfo()
 	// pullMinishopOrders()

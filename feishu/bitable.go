@@ -5,7 +5,27 @@ import (
 	"fmt"
 
 	larkbitable "github.com/larksuite/oapi-sdk-go/v3/service/bitable/v1"
+	larkdrive "github.com/larksuite/oapi-sdk-go/v3/service/drive/v1"
 )
+
+func ListFields(appToken, tableId string) *larkbitable.ListAppTableFieldResp {
+	req := larkbitable.NewListAppTableFieldReqBuilder().
+		AppToken(appToken).
+		TableId(tableId).
+		PageSize(100).
+		Build()
+
+	resp, err := client.Bitable.AppTableField.List(context.Background(), req)
+	if err != nil {
+		panic(err)
+	}
+
+	if !resp.Success() {
+		fmt.Println(resp.Code, resp.Msg, resp.RequestId())
+		panic(resp.Msg)
+	}
+	return resp
+}
 
 func ListRecords(appToken, tableId, filter string) *larkbitable.ListAppTableRecordResp {
 	req := larkbitable.NewListAppTableRecordReqBuilder().
@@ -106,5 +126,23 @@ func UpdateRecords(appToken, tableId string, records map[string](map[string]inte
 	}
 
 	// fmt.Println(larkcore.Prettify(resp))
+	return resp
+}
+
+func SubscribeBitableEvents(appToken string) *larkdrive.SubscribeFileResp {
+	req := larkdrive.NewSubscribeFileReqBuilder().
+		FileToken(appToken).
+		FileType("bitable").
+		Build()
+	resp, err := client.Drive.File.Subscribe(context.Background(), req)
+	if err != nil {
+		panic(err)
+	}
+
+	if !resp.Success() {
+		fmt.Println(resp.Code, resp.Msg, resp.RequestId())
+		panic(resp.Msg)
+	}
+
 	return resp
 }
